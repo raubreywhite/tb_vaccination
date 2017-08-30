@@ -5,14 +5,73 @@ output:
   - html_notebook
 ---
 
+PDF Version available [here](http://rwhite.no/tb_vaccination/tb_vaccination.pdf).
 
-This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+library(data.table)
+library(pomp)
+library(ggplot2)
+library(rstan)
 
-Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores())
 
-```{r}
-plot(cars)
+#everyone enters on jan 1
+#results are for dec 31
+newPeople <- data.table(id=1:100,year=2000,age=1,timeNotVax=0,timeWithVax=0,vaccinated=0,ltbi=0,atbi=0)
+
+
+pomp::bake("data/peopleNoVax.RDS",{
+  set.seed(4)
+  peopleNoVax <- vector("list",length=17)
+  peopleNoVax[[1]] <- newPeople[1,][-1,]
+  for(i in 1:17){
+    # NO VACCINATIONS
+    if(i!=1) peopleNoVax[[i]] <- copy(peopleNoVax[[i-1]])
+    peopleNoVax[[i]][,age:=age+1]
+    peopleNoVax[[i]] <- rbind(peopleNoVax[[i]],newPeople)
+    peopleNoVax[[i]][,year:=2000+i]
+    N <- nrow(peopleNoVax[[i]])
+    if(i<=9){
+      peopleNoVax[[i]][sample(1:N,size=round(N*0.050)),ltbi:=1]
+      peopleNoVax[[i]][,timeNotVax:=timeNotVax+1]
+    } else {
+      peopleNoVax[[i]][sample(1:N,size=round(N*0.050)),ltbi:=1]
+      peopleNoVax[[i]][,timeWithVax:=timeWithVax+1]
+    }
+    
+    Nltbi <- sum(peopleNoVax[[i]]$ltbi)
+    peopleNoVax[[i]][sample(which(peopleNoVax[[i]]$ltbi==1),size=round(Nltbi*0.05)),atbi:=1]
+  }
+  peopleNoVax
+}) -> peopleNoVax
+
+pomp::bake("data/peopleNoVax.RDS",{
+  set.seed(4)
+  peopleWithVax <- vector("list",length=17)
+  peopleWithVax[[1]] <- newPeople[1,][-1,]
+  for(i in 1:17){
+    # WITH VACCINATIONS, BUT STOPPING THEM AFTERWARDS
+    if(i!=1) peopleWithVax[[i]] <- copy(peopleWithVax[[i-1]])
+    peopleWithVax[[i]][,age:=age+1]
+    peopleWithVax[[i]] <- rbind(peopleWithVax[[i]],newPeople)
+    peopleWithVax[[i]][,year:=2000+i]
+    N <- nrow(peopleWithVax[[i]])
+    if(i>=10){
+      peopleWithVax[[i]][sample(1:N,size=round(N*0.050)),ltbi:=1]
+      peopleWithVax[[i]][,timeNotVax:=timeNotVax+1]
+    } else {
+      peopleWithVax[[i]][sample(1:N,size=round(N*0.050)),ltbi:=1]
+      peopleWithVax[[i]][,timeWithVax:=timeWithVax+1]
+    }
+    
+    Nltbi <- sum(peopleWithVax[[i]]$ltbi)
+    peopleWithVax[[i]][sample(which(peopleWithVax[[i]]$ltbi==1),size=round(Nltbi*0.05)),atbi:=1]
+  }
+  peopleWithVax
+}) -> peopleWithVax
 ```
+
 
 Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
 
