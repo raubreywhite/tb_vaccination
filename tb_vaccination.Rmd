@@ -7,6 +7,8 @@ output:
 
 PDF Version available [here](http://rwhite.no/tb_vaccination/tb_vaccination.pdf).
 
+## Data creation
+
 ```{r, message=FALSE, warning=FALSE}
 library(data.table)
 library(pomp)
@@ -18,7 +20,7 @@ options(mc.cores = parallel::detectCores())
 
 #everyone enters on jan 1
 #results are for dec 31
-newPeople <- data.table(id=1:100,year=2000,age=1,timeNotVax=0,timeWithVax=0,vaccinated=0,ltbi=0,atbi=0)
+newPeople <- data.table(id=1:100,year=2000,age=1,timeNoVax=0,timeWithVax=0,vaccinated=0,ltbi=0,atbi=0)
 
 pomp::bake("data/peopleNoVax.RDS",{
   set.seed(4)
@@ -33,7 +35,7 @@ pomp::bake("data/peopleNoVax.RDS",{
     
     N <- nrow(peopleNoVax[[i]])
     peopleNoVax[[i]][sample(1:N,size=round(N*0.050)),ltbi:=1]
-    peopleNoVax[[i]][,timeNotVax:=timeNotVax+1]
+    peopleNoVax[[i]][,timeNoVax:=timeNoVax+1]
     
     Nltbi <- sum(peopleNoVax[[i]]$ltbi)
     peopleNoVax[[i]][sample(which(peopleNoVax[[i]]$ltbi==1),size=round(Nltbi*0.05)),atbi:=1]
@@ -54,7 +56,7 @@ pomp::bake("data/peopleWithVax.RDS",{
     N <- nrow(peopleWithVax[[i]])
     if(i>=10){
       peopleWithVax[[i]][sample(1:N,size=round(N*0.050)),ltbi:=1]
-      peopleWithVax[[i]][,timeNotVax:=timeNotVax+1]
+      peopleWithVax[[i]][,timeNoVax:=timeNoVax+1]
     } else {
       peopleWithVax[[i]][sample(1:N,size=round(N*0.050)),ltbi:=1]
       peopleWithVax[[i]][,timeWithVax:=timeWithVax+1]
@@ -67,39 +69,79 @@ pomp::bake("data/peopleWithVax.RDS",{
 }) -> peopleWithVax
 ```
 
+## Detecting LTBI without vaccination
+
 Lets try an easy model, detecting LTBI in unvaccinated people.
 
 ```{r}
 stanData=peopleNoVax[[17]]
 data = list(N=nrow(stanData),
             y=stanData$ltbi,
-            timeNotVax=stanData$timeNotVax)
+            timeNoVax=stanData$timeNoVax)
 
 stan_code = "
 data {
   int<lower=0> N;
-  vector[N] timeNotVax;
+  vector[N] timeNoVax;
   int y[N];
 }
 parameters {
-  real<lower=0,upper=0.5> thetaNotVax;
+  real<lower=0,upper=0.5> thetaNoVax;
 }
 model {
-  thetaNotVax ~ beta(0.05, 1);
+  thetaNoVax ~ beta(0.05, 1);
   
   for (n in 1:N) 
-    y[n] ~ bernoulli(1-((1-thetaNotVax)^timeNotVax[n]));
+    y[n] ~ bernoulli(1-((1-thetaNoVax)^timeNoVax[n]));
 }
 "
-pomp::bake("results/noVax.RDS",{
-stan(model_code=stan_code,
-            model_name="noVax",
-            data=data,
-            iter=2000, chains=1, init=0)
+pomp::bake("results/noVaxLTBI.RDS",{
+  stan(model_code=stan_code,
+              model_name="noVaxLTBI",
+              data=data,
+              iter=10000, chains=4, init=0, seed=4)
 }) -> fit
 summary(fit)$summary
 ```
 
-Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
+## Detecting LTBI with vaccination
 
-When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file).
+Lets try a harder model, detecting LTBI when vaccination originally exists, and is then phased out
+
+```{r}
+stanData=peopleNoVax[[17]]
+data = list(N=nrow(stanData),
+            y=stanData$ltbi,
+            timeNoVax=stanData$timeNoVax,
+            timeWithVax=stanData$timeWithVax
+            )
+
+stan_code = "
+data {
+  int<lower=0> N;
+  vector[N] timeWithVax;
+  vector[N] timeNoVax;
+  int y[N];
+}
+parameters {
+  real<lower=0,upper=0.5> thetaWithVax;
+  real<lower=0,upper=0.5> thetaNoVax;
+}
+model {
+  thetaWithVax ~ beta(0.05, 1);
+  thetaNoVax ~ beta(0.05, 1);
+  
+  for (n in 1:N) 
+    y[n] ~ bernoulli(1-((1-thetaWithVax)^timeWithVax[n])*((1-thetaNoVax)^timeNoVax[n]));
+}
+"
+pomp::bake("results/withVaxLTBI.RDS",{
+  stan(model_code=stan_code,
+              model_name="withVaxLTBI",
+              data=data,
+              iter=10000, chains=4, init=0, seed=4)
+}) -> fit
+summary(fit)$summary
+```
+
+
