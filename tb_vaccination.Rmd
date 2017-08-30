@@ -73,6 +73,14 @@ pomp::bake("data/peopleWithVax.RDS",{
 
 Lets try an easy model, detecting LTBI in unvaccinated people.
 
+We have a Poisson binomial distribution, where the probability of person $i$ not having LTBI is:
+
+$$Pr(Y_i=0 | p, T_i) = 1 - (1-p)^{T_i}$$
+
+And the probability of person $i$ having LTBI is:
+
+$$Pr(Y_i=1 | p, T_i) = 1 - Pr(Y_i=0 | p, T_i)$$
+
 ```{r}
 stanData=peopleNoVax[[17]]
 data = list(N=nrow(stanData),
@@ -106,7 +114,15 @@ summary(fit)$summary
 
 ## Detecting LTBI with vaccination
 
-Lets try a harder model, detecting LTBI when vaccination originally exists, and is then phased out
+Lets try a harder model, detecting LTBI when vaccination originally exists, and is then phased out.
+
+We have a Poisson binomial distribution, where the probability of person not $i$ having LTBI is:
+
+$$Pr(Y_i=0 | p_w, p_n, TW_i, TN_i) = 1-(1-p_w)^{TW_i} \times (1-p_n)^{TN_i}$$
+
+And the probability of person $i$ not having LTBI is:
+
+$$Pr(Y_i=1 | p_w, p_n, TW_i, TN_i) = 1 - Pr(Y_i=0 | p_w, p_n, TW_i, TN_i)$$
 
 ```{r}
 stanData=peopleNoVax[[17]]
