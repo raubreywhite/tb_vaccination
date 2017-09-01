@@ -38,10 +38,9 @@ pomp::bake("data/peopleNoVax.RDS",{
     peopleNoVax[[i]][,timeNoVax:=timeNoVax+1]
     
     Nltbi <- sum(peopleNoVax[[i]]$ltbi)
-    peopleNoVax[[i]][atbi==1,ltbi:=0]
     peopleNoVax[[i]][atbi==1,ageAtTB:=age]
     peopleNoVax[[i]][,atbi:=0] # people with ATBI go to the doctor and get cured last year
-    peopleNoVax[[i]][sample(which(peopleNoVax[[i]]$ltbi==1),size=round(Nltbi*0.1)),atbi:=1]
+    peopleNoVax[[i]][sample(which(peopleNoVax[[i]]$ltbi==1 & peopleNoVax[[i]]$ageAtTB==0),size=round(Nltbi*0.1)),atbi:=1]
   }
   peopleNoVax
 }) -> peopleNoVax
@@ -67,10 +66,9 @@ pomp::bake("data/peopleWithVax.RDS",{
     
     Nltbi <- sum(peopleWithVax[[i]]$ltbi)
     peopleWithVax[[i]] <- peopleWithVax[[i]][atbi==0]
-    peopleWithVax[[i]][atbi==1,ltbi:=0]
     peopleWithVax[[i]][atbi==1,ageAtTB:=age]
     peopleWithVax[[i]][,atbi:=0] # people with ATBI go to the doctor and get cured last year
-    peopleWithVax[[i]][sample(which(peopleWithVax[[i]]$ltbi==1),size=round(Nltbi*0.1)),atbi:=1]
+    peopleWithVax[[i]][sample(which(peopleWithVax[[i]]$ltbi==1 & peopleWithVax[[i]]$ageAtTB==0),size=round(Nltbi*0.1)),atbi:=1]
   }
   peopleWithVax
 }) -> peopleWithVax
