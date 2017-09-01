@@ -20,7 +20,7 @@ options(mc.cores = parallel::detectCores())
 
 #everyone enters on jan 1
 #results are for dec 31
-newPeople <- data.table(id=1:100,year=2000,age=1,timeNoVax=0,timeWithVax=0,vaccinated=0,ltbi=0,atbi=0)
+newPeople <- data.table(id=1:1000,year=2000,age=1,timeNoVax=0,timeWithVax=0,vaccinated=0,ltbi=0,atbi=0,ageAtTB=0)
 
 pomp::bake("data/peopleNoVax.RDS",{
   set.seed(4)
@@ -38,7 +38,10 @@ pomp::bake("data/peopleNoVax.RDS",{
     peopleNoVax[[i]][,timeNoVax:=timeNoVax+1]
     
     Nltbi <- sum(peopleNoVax[[i]]$ltbi)
-    peopleNoVax[[i]][sample(which(peopleNoVax[[i]]$ltbi==1),size=round(Nltbi*0.05)),atbi:=1]
+    peopleNoVax[[i]][atbi==1,ltbi:=0]
+    peopleNoVax[[i]][atbi==1,ageAtTB:=age]
+    peopleNoVax[[i]][,atbi:=0] # people with ATBI go to the doctor and get cured last year
+    peopleNoVax[[i]][sample(which(peopleNoVax[[i]]$ltbi==1),size=round(Nltbi*0.1)),atbi:=1]
   }
   peopleNoVax
 }) -> peopleNoVax
@@ -63,7 +66,11 @@ pomp::bake("data/peopleWithVax.RDS",{
     }
     
     Nltbi <- sum(peopleWithVax[[i]]$ltbi)
-    peopleWithVax[[i]][sample(which(peopleWithVax[[i]]$ltbi==1),size=round(Nltbi*0.05)),atbi:=1]
+    peopleWithVax[[i]] <- peopleWithVax[[i]][atbi==0]
+    peopleWithVax[[i]][atbi==1,ltbi:=0]
+    peopleWithVax[[i]][atbi==1,ageAtTB:=age]
+    peopleWithVax[[i]][,atbi:=0] # people with ATBI go to the doctor and get cured last year
+    peopleWithVax[[i]][sample(which(peopleWithVax[[i]]$ltbi==1),size=round(Nltbi*0.1)),atbi:=1]
   }
   peopleWithVax
 }) -> peopleWithVax
@@ -75,23 +82,27 @@ Lets try an easy model, detecting LTBI in unvaccinated people.
 
 We have a Poisson binomial distribution, where the probability of person $i$ not having LTBI is:
 
-$$Pr(Y_i=0 | p, T_i) = 1 - (1-p)^{T_i}$$
+$$Pr(Y_i=0 | p, T_i) = (1-p)^{T_i}$$
 
 And the probability of person $i$ having LTBI is:
 
 $$Pr(Y_i=1 | p, T_i) = 1 - Pr(Y_i=0 | p, T_i)$$
 
 ```{r}
-stanData=peopleNoVax[[17]]
+stanData <- copy(peopleNoVax[[17]])
+stanData[ageAtTB>0,ltbi:=1]
+stanData <- stanData[,.(R=.N),by=.(timeNoVax,timeWithVax,ltbi)]
 data = list(N=nrow(stanData),
-            y=stanData$ltbi,
+            R=stanData$R,
+            y=stanData$ltbi*stanData$R,
             timeNoVax=stanData$timeNoVax)
 
 stan_code = "
 data {
   int<lower=0> N;
-  vector[N] timeNoVax;
+  int R[N];
   int y[N];
+  vector[N] timeNoVax;
 }
 parameters {
   real<lower=0,upper=0.5> thetaNoVax;
@@ -99,8 +110,9 @@ parameters {
 model {
   thetaNoVax ~ beta(0.05, 1);
   
-  for (n in 1:N) 
-    y[n] ~ bernoulli(1-((1-thetaNoVax)^timeNoVax[n]));
+  for (n in 1:N){
+    y[n] ~ binomial(R[n],1-((1-thetaNoVax)^timeNoVax[n]));
+  }
 }
 "
 pomp::bake("results/noVaxLTBI.RDS",{
@@ -118,16 +130,19 @@ Lets try a harder model, detecting LTBI when vaccination originally exists, and 
 
 We have a Poisson binomial distribution, where the probability of person not $i$ having LTBI is:
 
-$$Pr(Y_i=0 | p_w, p_n, TW_i, TN_i) = 1-(1-p_w)^{TW_i} \times (1-p_n)^{TN_i}$$
+$$Pr(Y_i=0 | p_w, p_n, TW_i, TN_i) = (1-p_w)^{TW_i} \times (1-p_n)^{TN_i}$$
 
-And the probability of person $i$ not having LTBI is:
+And the probability of person $i$ having LTBI is:
 
 $$Pr(Y_i=1 | p_w, p_n, TW_i, TN_i) = 1 - Pr(Y_i=0 | p_w, p_n, TW_i, TN_i)$$
 
 ```{r}
-stanData=peopleNoVax[[17]]
+stanData <- copy(peopleWithVax[[17]])
+stanData[ageAtTB>0,ltbi:=1]
+stanData <- stanData[,.(R=.N),by=.(timeNoVax,timeWithVax,ltbi)]
 data = list(N=nrow(stanData),
-            y=stanData$ltbi,
+            R=stanData$R,
+            y=stanData$ltbi*stanData$R,
             timeNoVax=stanData$timeNoVax,
             timeWithVax=stanData$timeWithVax
             )
@@ -135,22 +150,25 @@ data = list(N=nrow(stanData),
 stan_code = "
 data {
   int<lower=0> N;
-  vector[N] timeWithVax;
-  vector[N] timeNoVax;
+  int R[N];
   int y[N];
+  vector[N] timeNoVax;
+  vector[N] timeWithVax;
 }
 parameters {
-  real<lower=0,upper=0.5> thetaWithVax;
   real<lower=0,upper=0.5> thetaNoVax;
+  real<lower=0,upper=0.5> thetaWithVax;
 }
 model {
   thetaWithVax ~ beta(0.05, 1);
   thetaNoVax ~ beta(0.05, 1);
   
-  for (n in 1:N) 
-    y[n] ~ bernoulli(1-((1-thetaWithVax)^timeWithVax[n])*((1-thetaNoVax)^timeNoVax[n]));
+  for (n in 1:N){
+    y[n] ~ binomial(R[n], 1-((1-thetaWithVax)^timeWithVax[n])*((1-thetaNoVax)^timeNoVax[n]));
+  }
 }
 "
+
 pomp::bake("results/withVaxLTBI.RDS",{
   stan(model_code=stan_code,
               model_name="withVaxLTBI",
@@ -160,4 +178,82 @@ pomp::bake("results/withVaxLTBI.RDS",{
 summary(fit)$summary
 ```
 
+
+## Detecting ATBI without vaccination
+
+Lets try a hard model, detecting ATBI in unvaccinated people. ATBI is incident TB and detected in the year that it occurs.
+
+We have a Poisson binomial distribution, where the probability of person $i$ not having ATBI is:
+
+$$Pr(ATBI_i=0 | p_\text{atbi}, p_\text{ltbi}, T_i) = Pr(LTBI_i=0 | p_\text{atbi}, p_\text{ltbi}, T_i) + Pr(LTBI_i=1 \text{ without activation} | p_\text{atbi}, p_\text{ltbi}, T_i)$$
+$$ = (1-p_\text{ltbi})^{T_i} + \Sigma_{t=1}^{t=T_i}Pr(\text{Incident LTBI infection at time }t,\text{ no activation})$$
+$$ = (1-p_\text{ltbi})^{T_i} + \Sigma_{t=1}^{t=T_i} (1-p_\text{ltbi})^{t-1} \times p_\text{ltbi} \times (1-p_\text{atbi})^{T_i-t+1}$$
+
+And the probability of person $i$ having LTBI is:
+
+$$Pr(ATBI_i=1 | p_\text{atbi}, p_\text{ltbi}, T_i) = 1 - Pr(ATBI_i=0 | p_\text{atbi}, p_\text{ltbi}, T_i) $$
+
+```{r}
+cases <- list()
+for(i in 1:14){
+  cases[[i]] <- peopleNoVax[[i]][atbi==1]
+}
+cases <- rbindlist(cases)
+controls <- peopleNoVax[[17]][atbi==0 & ageAtTB==0]
+cases
+
+cases[,ageAtTB:=0]
+controls[,ageAtTB:=0]
+
+stanData <- rbind(controls[,.(R=.N),by=.(timeNoVax,timeWithVax,atbi)],cases[,.(R=.N),by=.(timeNoVax,timeWithVax,atbi)])
+data = list(N=nrow(stanData),
+            R=stanData$R,
+            y=stanData$atbi*stanData$R,
+            timeNoVax=stanData$timeNoVax)
+
+stan_code = "
+data {
+  int<lower=0> N;
+  int timeNoVax[N];
+  int R[N];
+  int y[N];
+}
+parameters {
+  real<lower=0,upper=0.5> ltbiNoVax;
+  real<lower=0,upper=0.5> atbiNoVax;
+}
+model {
+real ps;
+  ltbiNoVax ~ beta(0.05, 1);
+  atbiNoVax ~ beta(0.05, 1);
+  
+  {
+    int replicates;
+    int personTime;
+    real prob_ltbi_no_tb;
+
+    for (n in 1:N){
+      prob_ltbi_no_tb = (1-ltbiNoVax)^timeNoVax[n];
+      personTime = timeNoVax[n];
+      replicates = R[n];
+
+      for(t in 1:personTime){
+         prob_ltbi_no_tb = prob_ltbi_no_tb + ((1-ltbiNoVax)^(t-1))*ltbiNoVax*((1-atbiNoVax)^(personTime-t+1));
+      }
+
+      y[n] ~ binomial(R[n], 1-prob_ltbi_no_tb);
+    }
+  }
+}
+
+"
+
+pomp::bake("results/noVaxATBI.RDS",{
+  stan(model_code=stan_code,
+              model_name="noVaxATBI",
+              data=data,
+              iter=10000, chains=4, init=0, seed=4)
+}) -> fit
+summary(fit)$summary
+```
 
