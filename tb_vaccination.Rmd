@@ -200,7 +200,6 @@ for(i in 1:14){
 }
 cases <- rbindlist(cases)
 controls <- peopleNoVax[[17]][atbi==0 & ageAtTB==0]
-cases
 
 cases[,ageAtTB:=0]
 controls[,ageAtTB:=0]
