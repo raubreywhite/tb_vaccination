@@ -9,6 +9,14 @@ PDF Version available [here](http://rwhite.no/tb_vaccination/tb_vaccination.pdf)
 
 ## Data creation
 
+We construct three datasets: `peopleNoVax`, `peopleWithVax`, and `peopleTB`. 
+
+`peopleNoVax` is a dataset that spans 17 years. Each year, 10000 people are added to it. Each year, a person has a 5% annual risk of being infected with LTBI. Once a person is infected with LTBI, they have a 2.5% annual risk of being infected with ATBI.
+
+`peopleWithVax` is a dataset that spans 17 years. Each year, 10000 people are added to it. For the first 10 years, a person has a 5% annual risk of being infected with LTBI. Subsequently they have a 2.5% annual risk of being infected with LTBI. Once a person is infected with LTBI, they have a 2.5% annual risk of being infected with ATBI.
+
+`peopleTB` is a dataset that spans 17 years. Each year, 10000 people are added to it. Each year, a person has a 5% annual risk of being infected with ATBI.
+
 ```{r, message=FALSE, warning=FALSE}
 library(data.table)
 library(pomp)
@@ -20,7 +28,17 @@ options(mc.cores = parallel::detectCores())
 
 #everyone enters on jan 1
 #results are for dec 31
-newPeople <- data.table(id=1:1000,year=2000,age=1,timeNoVax=0,timeWithVax=0,vaccinated=0,ltbi=0,atbi=0,ageAtTB=0)
+newPeople <- data.table(id=1:10000,year=2000,age=1,timeNoVax=0,timeWithVax=0,vaccinated=0,ltbi=0,atbi=0,ageAtTB=0)
+
+if(FALSE){
+  file.remove("data/peopleNoVax.RDS")
+  file.remove("data/peopleWithVax.RDS")
+  file.remove("data/peopleTB.RDS")
+  file.remove("results/noVaxLTBI.RDS")
+  file.remove("results/withVaxLTBI.RDS")
+  file.remove("results/ATBI.RDS")
+  file.remove("results/noVaxATBI.RDS")
+}
 
 pomp::bake("data/peopleNoVax.RDS",{
   set.seed(4)
@@ -37,10 +55,10 @@ pomp::bake("data/peopleNoVax.RDS",{
     peopleNoVax[[i]][sample(1:N,size=round(N*0.050)),ltbi:=1]
     peopleNoVax[[i]][,timeNoVax:=timeNoVax+1]
     
-    Nltbi <- sum(peopleNoVax[[i]]$ltbi)
-    peopleNoVax[[i]][atbi==1,ageAtTB:=age]
     peopleNoVax[[i]][,atbi:=0] # people with ATBI go to the doctor and get cured last year
-    peopleNoVax[[i]][sample(which(peopleNoVax[[i]]$ltbi==1 & peopleNoVax[[i]]$ageAtTB==0),size=round(Nltbi*0.1)),atbi:=1]
+    Nltbi <- sum(peopleNoVax[[i]]$ltbi==1 & peopleNoVax[[i]]$ageAtTB==0)
+    peopleNoVax[[i]][sample(which(peopleNoVax[[i]]$ltbi==1 & peopleNoVax[[i]]$ageAtTB==0),size=round(Nltbi*0.025)),atbi:=1]
+    peopleNoVax[[i]][atbi==1,ageAtTB:=age]
   }
   peopleNoVax
 }) -> peopleNoVax
@@ -60,35 +78,54 @@ pomp::bake("data/peopleWithVax.RDS",{
       peopleWithVax[[i]][sample(1:N,size=round(N*0.050)),ltbi:=1]
       peopleWithVax[[i]][,timeNoVax:=timeNoVax+1]
     } else {
-      peopleWithVax[[i]][sample(1:N,size=round(N*0.050)),ltbi:=1]
+      peopleWithVax[[i]][sample(1:N,size=round(N*0.025)),ltbi:=1]
       peopleWithVax[[i]][,timeWithVax:=timeWithVax+1]
     }
     
-    Nltbi <- sum(peopleWithVax[[i]]$ltbi)
-    peopleWithVax[[i]] <- peopleWithVax[[i]][atbi==0]
+    Nltbi <- sum(peopleWithVax[[i]]$ltbi==1 & peopleWithVax[[i]]$ageAtTB==0)
     peopleWithVax[[i]][atbi==1,ageAtTB:=age]
     peopleWithVax[[i]][,atbi:=0] # people with ATBI go to the doctor and get cured last year
-    peopleWithVax[[i]][sample(which(peopleWithVax[[i]]$ltbi==1 & peopleWithVax[[i]]$ageAtTB==0),size=round(Nltbi*0.1)),atbi:=1]
+    peopleWithVax[[i]][sample(which(peopleWithVax[[i]]$ltbi==1 & peopleWithVax[[i]]$ageAtTB==0),size=round(Nltbi*0.025)),atbi:=1]
   }
   peopleWithVax
 }) -> peopleWithVax
+
+pomp::bake("data/peopleTB.RDS",{
+  set.seed(4)
+  peopleTB <- vector("list",length=17)
+  peopleTB[[1]] <- newPeople[1,][-1,]
+  for(i in 1:17){
+    # NO VACCINATIONS
+    if(i!=1) peopleTB[[i]] <- copy(peopleTB[[i-1]])
+    peopleTB[[i]][,age:=age+1]
+    peopleTB[[i]] <- rbind(peopleTB[[i]],newPeople)
+    peopleTB[[i]][,year:=2000+i]
+    
+    peopleTB[[i]][,timeNoVax:=timeNoVax+1]
+    
+    peopleTB[[i]][,atbi:=0] # people with ATBI go to the doctor and get cured last year
+    N <- sum(peopleTB[[i]]$ageAtTB==0)
+    peopleTB[[i]][sample(which(peopleTB[[i]]$ageAtTB==0),size=round(N*0.05)),atbi:=1]
+    peopleTB[[i]][atbi==1,ageAtTB:=age]
+  }
+  peopleTB
+}) -> peopleTB
 ```
 
 ## Detecting LTBI without vaccination
 
-Lets try an easy model, detecting LTBI in unvaccinated people.
+We will try to model the annual risk of LTBI in the dataset `peopleNoVax`, where LTBI is only measured at the end of the dataset (i.e. after 17 years).
 
-We have a Poisson binomial distribution, where the probability of person $i$ not having LTBI is:
+For a person $i$, who has spent $T_i$ years at risk, their probability of not having LTBI is:
 
 $$Pr(Y_i=0 | p, T_i) = (1-p)^{T_i}$$
 
-And the probability of person $i$ having LTBI is:
+And their corresponding probability of having LTBI is:
 
 $$Pr(Y_i=1 | p, T_i) = 1 - Pr(Y_i=0 | p, T_i)$$
 
 ```{r}
 stanData <- copy(peopleNoVax[[17]])
-stanData[ageAtTB>0,ltbi:=1]
 stanData <- stanData[,.(R=.N),by=.(timeNoVax,timeWithVax,ltbi)]
 data = list(N=nrow(stanData),
             R=stanData$R,
@@ -113,6 +150,7 @@ model {
   }
 }
 "
+
 pomp::bake("results/noVaxLTBI.RDS",{
   stan(model_code=stan_code,
               model_name="noVaxLTBI",
@@ -124,9 +162,9 @@ summary(fit)$summary
 
 ## Detecting LTBI with vaccination
 
-Lets try a harder model, detecting LTBI when vaccination originally exists, and is then phased out.
+We will try to model the annual risk of LTBI in the dataset `peopleWithVax`, where LTBI is only measured at the end of the dataset (i.e. after 17 years), however, the risk of LTBI has changed due to the cessation of vaccination.
 
-We have a Poisson binomial distribution, where the probability of person not $i$ having LTBI is:
+For a person $i$, who has spent ${TW}_i$ years at risk when vaccinations were occurring, and ${TN}_i$ years at risk when no vaccinations were occuring, their probability of not having LTBI is:
 
 $$Pr(Y_i=0 | p_w, p_n, TW_i, TN_i) = (1-p_w)^{TW_i} \times (1-p_n)^{TN_i}$$
 
@@ -136,7 +174,6 @@ $$Pr(Y_i=1 | p_w, p_n, TW_i, TN_i) = 1 - Pr(Y_i=0 | p_w, p_n, TW_i, TN_i)$$
 
 ```{r}
 stanData <- copy(peopleWithVax[[17]])
-stanData[ageAtTB>0,ltbi:=1]
 stanData <- stanData[,.(R=.N),by=.(timeNoVax,timeWithVax,ltbi)]
 data = list(N=nrow(stanData),
             R=stanData$R,
@@ -177,6 +214,74 @@ summary(fit)$summary
 ```
 
 
+## Detecting straight ATBI without vaccination
+
+
+```{r}
+cases <- list()
+for(i in 1:17){
+  cases[[i]] <- peopleTB[[i]][atbi==1]
+}
+cases <- rbindlist(cases)
+controls <- peopleTB[[17]][ageAtTB==0]
+
+cases <- cases[,.(R=.N),by=.(timeNoVax,timeWithVax,atbi)]
+controls <- controls[,.(R=.N),by=.(timeNoVax,timeWithVax,atbi)]
+
+stanData <- rbind(controls,cases)
+#stanData <- cases
+data = list(N=nrow(stanData),
+            R=stanData$R,
+            y=stanData$atbi*stanData$R,
+            timeNoVax=stanData$timeNoVax)
+
+stan_code = "
+data {
+  int<lower=0> N;
+  int timeNoVax[N];
+  int R[N];
+  int y[N];
+}
+parameters {
+  real<lower=0,upper=0.5> atbiNoVax;
+}
+model {
+  atbiNoVax ~ beta(0.05, 1);
+  
+  {
+    int replicates;
+    int personTime;
+    real prob_no_atbi;
+    real prob_atbi_in_year;
+
+    for (n in 1:N){
+      prob_no_atbi = (1-atbiNoVax)^timeNoVax[n];
+      prob_atbi_in_year = (1-atbiNoVax)^(timeNoVax[n]-1)*atbiNoVax;
+      replicates = R[n];
+
+      if( y[n]==0 ){
+        target += R[n]*log(prob_no_atbi);
+      } else {
+        target += binomial_lpmf(y[n] | R[n], prob_atbi_in_year);
+      }
+      
+    }
+  }
+}
+
+"
+
+pomp::bake("results/ATBI.RDS",{
+  stan(model_code=stan_code,
+              model_name="ATBI",
+              data=data,
+              iter=10000, chains=4, init=0, seed=4)
+}) -> fit
+summary(fit)$summary
+```
+
+
+
 ## Detecting ATBI without vaccination
 
 Lets try a hard model, detecting ATBI in unvaccinated people. ATBI is incident TB and detected in the year that it occurs.
@@ -192,17 +297,40 @@ And the probability of person $i$ having LTBI is:
 $$Pr(ATBI_i=1 | p_\text{atbi}, p_\text{ltbi}, T_i) = 1 - Pr(ATBI_i=0 | p_\text{atbi}, p_\text{ltbi}, T_i) $$
 
 ```{r}
+
+pl <- 0.05
+pa <- 0.05
+TS <- ts <- 17
+t <- 1:ts
+
+s1 <- (1-pl)^ts # NO LTBI IN FIRST 10 YRS
+s2 <- ((1-pl)^t)*pl*((1-pa)^(ts-t+1)) # LTBI + NO ATBI IN FIRST 10 YRS
+sum(s1)+sum(s2)
+f <- c() # ATBI IN FIRST 10 YRS
+for(i in 1:TS){
+  ts <- i
+  t <- 1:ts
+  f[i] <- sum(((1-pl)^t)*pl*((1-pa)^(ts-t))*pa)
+}
+sum(f)
+sum(s1)+sum(s2)
+sum(f)+sum(s1)+sum(s2)
+
+
 cases <- list()
-for(i in 1:14){
+for(i in 1:17){
   cases[[i]] <- peopleNoVax[[i]][atbi==1]
 }
 cases <- rbindlist(cases)
-controls <- peopleNoVax[[17]][atbi==0 & ageAtTB==0]
+controls <- peopleNoVax[[17]][ageAtTB==0]
 
-cases[,ageAtTB:=0]
-controls[,ageAtTB:=0]
+cases <- cases[,.(R=.N),by=.(timeNoVax,timeWithVax,atbi)]
+controls <- controls[,.(R=.N),by=.(timeNoVax,timeWithVax,atbi)]
 
-stanData <- rbind(controls[,.(R=.N),by=.(timeNoVax,timeWithVax,atbi)],cases[,.(R=.N),by=.(timeNoVax,timeWithVax,atbi)])
+stanData <- rbind(controls,cases)
+stanData[timeNoVax==1]
+
+#stanData <- cases
 data = list(N=nrow(stanData),
             R=stanData$R,
             y=stanData$atbi*stanData$R,
@@ -227,18 +355,32 @@ real ps;
   {
     int replicates;
     int personTime;
-    real prob_ltbi_no_tb;
+    real prob_no_atbi;
+    real prob_atbi_in_year;
+    real survival;
 
     for (n in 1:N){
-      prob_ltbi_no_tb = (1-ltbiNoVax)^timeNoVax[n];
+      prob_no_atbi = (1-ltbiNoVax)^timeNoVax[n];
+      
       personTime = timeNoVax[n];
       replicates = R[n];
-
-      for(t in 1:personTime){
-         prob_ltbi_no_tb = prob_ltbi_no_tb + ((1-ltbiNoVax)^(t-1))*ltbiNoVax*((1-atbiNoVax)^(personTime-t+1));
+      if( y[n]>0 ){
+        prob_atbi_in_year = 0;
+        for(t in 1:personTime){
+           prob_atbi_in_year = prob_atbi_in_year + ((1-ltbiNoVax)^(t-1))*ltbiNoVax*((1-atbiNoVax)^(personTime-t))*atbiNoVax;
+        }
+        target += R[n]*log(prob_atbi_in_year);
+      } else {
+        survival=0;
+        for(q in 1:personTime){
+          prob_atbi_in_year = 0;
+          for(t in 1:q){
+             prob_atbi_in_year = prob_atbi_in_year + ((1-ltbiNoVax)^(t-1))*ltbiNoVax*((1-atbiNoVax)^(q-t))*atbiNoVax;
+          }
+          survival=survival+prob_atbi_in_year;
+        }
+        target += R[n]*log(1-survival);
       }
-
-      y[n] ~ binomial(R[n], 1-prob_ltbi_no_tb);
     }
   }
 }
