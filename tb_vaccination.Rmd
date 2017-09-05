@@ -28,7 +28,15 @@ options(mc.cores = parallel::detectCores())
 
 #everyone enters on jan 1
 #results are for dec 31
-newPeople <- data.table(id=1:10000,year=2000,age=1,timeNoVax=0,timeWithVax=0,vaccinated=0,ltbi=0,atbi=0,ageAtTB=0)
+newPeople <- data.table(id=1:10000,
+                        year=2000,
+                        age=1,
+                        timeNoVax=0,
+                        timeWithVax=0,
+                        vaccinated=0,
+                        ltbi=0,
+                        atbi=0,
+                        ageAtTB=0)
 
 if(FALSE){
   file.remove("data/peopleNoVax.RDS")
@@ -57,7 +65,10 @@ pomp::bake("data/peopleNoVax.RDS",{
     
     peopleNoVax[[i]][,atbi:=0] # people with ATBI go to the doctor and get cured last year
     Nltbi <- sum(peopleNoVax[[i]]$ltbi==1 & peopleNoVax[[i]]$ageAtTB==0)
-    peopleNoVax[[i]][sample(which(peopleNoVax[[i]]$ltbi==1 & peopleNoVax[[i]]$ageAtTB==0),size=round(Nltbi*0.025)),atbi:=1]
+    peopleNoVax[[i]][sample(
+      which(peopleNoVax[[i]]$ltbi==1 & peopleNoVax[[i]]$ageAtTB==0),
+      size=round(Nltbi*0.025)),
+      atbi:=1]
     peopleNoVax[[i]][atbi==1,ageAtTB:=age]
   }
   peopleNoVax
@@ -85,7 +96,10 @@ pomp::bake("data/peopleWithVax.RDS",{
     Nltbi <- sum(peopleWithVax[[i]]$ltbi==1 & peopleWithVax[[i]]$ageAtTB==0)
     peopleWithVax[[i]][atbi==1,ageAtTB:=age]
     peopleWithVax[[i]][,atbi:=0] # people with ATBI go to the doctor and get cured last year
-    peopleWithVax[[i]][sample(which(peopleWithVax[[i]]$ltbi==1 & peopleWithVax[[i]]$ageAtTB==0),size=round(Nltbi*0.025)),atbi:=1]
+    peopleWithVax[[i]][sample(
+      which(peopleWithVax[[i]]$ltbi==1 & peopleWithVax[[i]]$ageAtTB==0),
+      size=round(Nltbi*0.025)),
+      atbi:=1]
   }
   peopleWithVax
 }) -> peopleWithVax
@@ -124,6 +138,10 @@ And their corresponding probability of having LTBI is:
 
 $$Pr(Y_i=1 | p, T_i) = 1 - Pr(Y_i=0 | p, T_i)$$
 
+Leaving us with a likelihood function of:
+
+$$L(p | Y, T) = \Pi_{i=1}^n \left[1 - (1-p)^{T_i}\right]^{y_i} \times \left[(1-p)^{T_i}\right]^{1-y_i}$$
+
 ```{r}
 stanData <- copy(peopleNoVax[[17]])
 stanData <- stanData[,.(R=.N),by=.(timeNoVax,timeWithVax,ltbi)]
@@ -158,6 +176,7 @@ pomp::bake("results/noVaxLTBI.RDS",{
               iter=10000, chains=4, init=0, seed=4)
 }) -> fit
 summary(fit)$summary
+plot(fit)
 ```
 
 ## Detecting LTBI with vaccination
@@ -171,6 +190,10 @@ $$Pr(Y_i=0 | p_w, p_n, TW_i, TN_i) = (1-p_w)^{TW_i} \times (1-p_n)^{TN_i}$$
 And the probability of person $i$ having LTBI is:
 
 $$Pr(Y_i=1 | p_w, p_n, TW_i, TN_i) = 1 - Pr(Y_i=0 | p_w, p_n, TW_i, TN_i)$$
+
+Leaving us with a likelihood function of:
+
+$$L(p_w, p_n | Y, TW, TN) = \Pi_{i=1}^n \left[1 - (1-p_w)^{TW_i} \times (1-p_n)^{TN_i} \right]^{y_i} \times \left[ (1-p_w)^{TW_i} \times (1-p_n)^{TN_i} \right]^{1-y_i}$$
 
 ```{r}
 stanData <- copy(peopleWithVax[[17]])
@@ -211,11 +234,31 @@ pomp::bake("results/withVaxLTBI.RDS",{
               iter=10000, chains=4, init=0, seed=4)
 }) -> fit
 summary(fit)$summary
+plot(fit)
 ```
 
 
 ## Detecting straight ATBI without vaccination
 
+We will try to model the annual risk of ATBI in the dataset `peopleTB`, where ATBI is measured at the end of each year. This is an example of survival analysis, as the people who were not infected with ATBI will have a right-censored time at the end of the followup.
+
+Standard survival analysis definitions apply here. The probability of an individual's surviving (i.e. not acquiring ATBI) till time $t$ is given by the survivor function:
+
+$$S(t) = 1 - F(t) = P(T > t)$$
+
+The likelihood function for parameters $\lambda$, given data $D$ is:
+
+$$L(\lambda | D) = \Pi_{i=1}^n f(y_i | \lambda)^v_i \times S(y_i | \lambda)^{(1-v_i)}$$
+
+Where $v_i=1$ if person $i$ is uncensored (0 if censored), and $f$ is the density distribution for $y_i$ (time until ATBI).
+
+In our dataset, for person $i$, the probability that they will get ATBI after $y_i$ years is distributed as a geometric distribution:
+
+$$f(Y_i = y_i | p) = (1-p)^{(y_i-1)} \times p$$
+
+The survival function can thus be defined as:
+
+$$S(y_i | p) = (1-p)^{y_i}$$
 
 ```{r}
 cases <- list()
@@ -278,23 +321,105 @@ pomp::bake("results/ATBI.RDS",{
               iter=10000, chains=4, init=0, seed=4)
 }) -> fit
 summary(fit)$summary
+plot(fit)
 ```
 
 
+## Detecting ATBI following LTBI without vaccination
 
-## Detecting ATBI without vaccination
+Using the dataset `peopleNoVax`, we try to estimate the annual risk of LTBI and ATBI, given that we can only observe ATBI in the year that it occurs. This is an extension of the previous models.
 
-Lets try a hard model, detecting ATBI in unvaccinated people. ATBI is incident TB and detected in the year that it occurs.
+In our dataset, for person $i$, the probability that they will get ATBI after $y_i$ years is distributed as a geometric distribution:
 
-We have a Poisson binomial distribution, where the probability of person $i$ not having ATBI is:
+$$f(Y_i = y_i | p_L, p_A) = \Sigma_{t=1}^{y_i} (1-p_L)^{(t-1)} \times p_L \times (1-p_A)^{(y_i-t)} \times p_A$$
 
-$$Pr(ATBI_i=0 | p_\text{atbi}, p_\text{ltbi}, T_i) = Pr(LTBI_i=0 | p_\text{atbi}, p_\text{ltbi}, T_i) + Pr(LTBI_i=1 \text{ without activation} | p_\text{atbi}, p_\text{ltbi}, T_i)$$
-$$ = (1-p_\text{ltbi})^{T_i} + \Sigma_{t=1}^{t=T_i}Pr(\text{Incident LTBI infection at time }t,\text{ no activation})$$
-$$ = (1-p_\text{ltbi})^{T_i} + \Sigma_{t=1}^{t=T_i} (1-p_\text{ltbi})^{t-1} \times p_\text{ltbi} \times (1-p_\text{atbi})^{T_i-t+1}$$
+Briefly described, we calculate the probability that a person gets LTBI in year $t$ and subsequently ATBI in year $y_i$, then we sum these probabilities for $t=1, \dots, y_i$.
 
-And the probability of person $i$ having LTBI is:
+The survival function can thus be defined as:
 
-$$Pr(ATBI_i=1 | p_\text{atbi}, p_\text{ltbi}, T_i) = 1 - Pr(ATBI_i=0 | p_\text{atbi}, p_\text{ltbi}, T_i) $$
+$$S(y_i | p_L, p_A) = 1 - \Sigma_{t=1}^{y_i} f(t | p_L, p_A) $$
+
+```{r}
+
+cases <- list()
+for(i in 1:17){
+  cases[[i]] <- peopleNoVax[[i]][atbi==1]
+}
+cases <- rbindlist(cases)
+controls <- peopleNoVax[[17]][ageAtTB==0]
+
+cases <- cases[,.(R=.N),by=.(timeNoVax,timeWithVax,atbi)]
+controls <- controls[,.(R=.N),by=.(timeNoVax,timeWithVax,atbi)]
+
+stanData <- rbind(controls,cases)
+stanData[timeNoVax==1]
+
+#stanData <- cases
+data = list(N=nrow(stanData),
+            R=stanData$R,
+            ATBIstatus=stanData$atbi,
+            timeNoVax=stanData$timeNoVax)
+
+stan_code = "
+data {
+  int<lower=0> N;
+  int timeNoVax[N];
+  int R[N];
+  int ATBIstatus[N];
+}
+parameters {
+  real<lower=0,upper=0.5> ltbiNoVax;
+  real<lower=0,upper=0.5> atbiNoVax;
+}
+model {
+real ps;
+  ltbiNoVax ~ beta(0.05, 1);
+  atbiNoVax ~ beta(0.05, 1);
+  
+  {
+    int replicates;
+    int personTime;
+    real prob_atbi_in_year;
+    real survival;
+
+    for (n in 1:N){
+      personTime = timeNoVax[n];
+      replicates = R[n];
+
+      if( ATBIstatus[n]==1 ){
+        prob_atbi_in_year = 0;
+        for(t in 1:personTime){
+           prob_atbi_in_year = prob_atbi_in_year + ((1-ltbiNoVax)^(t-1))*ltbiNoVax*((1-atbiNoVax)^(personTime-t))*atbiNoVax;
+        }
+        target += replicates*log(prob_atbi_in_year);
+      } else {
+        survival=0;
+        for(q in 1:personTime){
+          prob_atbi_in_year = 0;
+          for(t in 1:q){
+             prob_atbi_in_year = prob_atbi_in_year + ((1-ltbiNoVax)^(t-1))*ltbiNoVax*((1-atbiNoVax)^(q-t))*atbiNoVax;
+          }
+          survival=survival+prob_atbi_in_year;
+        }
+        target += replicates*log(1-survival);
+      }
+    }
+  }
+}
+
+"
+
+pomp::bake("results/noVaxATBI.RDS",{
+  stan(model_code=stan_code,
+              model_name="noVaxATBI",
+              data=data,
+              iter=10000, chains=4, init=0, seed=4)
+}) -> fit
+summary(fit)$summary
+plot(fit)
+```
+
+## Fictional stuff -- ignore
 
 ```{r}
 
@@ -316,83 +441,5 @@ sum(f)
 sum(s1)+sum(s2)
 sum(f)+sum(s1)+sum(s2)
 
-
-cases <- list()
-for(i in 1:17){
-  cases[[i]] <- peopleNoVax[[i]][atbi==1]
-}
-cases <- rbindlist(cases)
-controls <- peopleNoVax[[17]][ageAtTB==0]
-
-cases <- cases[,.(R=.N),by=.(timeNoVax,timeWithVax,atbi)]
-controls <- controls[,.(R=.N),by=.(timeNoVax,timeWithVax,atbi)]
-
-stanData <- rbind(controls,cases)
-stanData[timeNoVax==1]
-
-#stanData <- cases
-data = list(N=nrow(stanData),
-            R=stanData$R,
-            y=stanData$atbi*stanData$R,
-            timeNoVax=stanData$timeNoVax)
-
-stan_code = "
-data {
-  int<lower=0> N;
-  int timeNoVax[N];
-  int R[N];
-  int y[N];
-}
-parameters {
-  real<lower=0,upper=0.5> ltbiNoVax;
-  real<lower=0,upper=0.5> atbiNoVax;
-}
-model {
-real ps;
-  ltbiNoVax ~ beta(0.05, 1);
-  atbiNoVax ~ beta(0.05, 1);
-  
-  {
-    int replicates;
-    int personTime;
-    real prob_no_atbi;
-    real prob_atbi_in_year;
-    real survival;
-
-    for (n in 1:N){
-      prob_no_atbi = (1-ltbiNoVax)^timeNoVax[n];
-      
-      personTime = timeNoVax[n];
-      replicates = R[n];
-      if( y[n]>0 ){
-        prob_atbi_in_year = 0;
-        for(t in 1:personTime){
-           prob_atbi_in_year = prob_atbi_in_year + ((1-ltbiNoVax)^(t-1))*ltbiNoVax*((1-atbiNoVax)^(personTime-t))*atbiNoVax;
-        }
-        target += R[n]*log(prob_atbi_in_year);
-      } else {
-        survival=0;
-        for(q in 1:personTime){
-          prob_atbi_in_year = 0;
-          for(t in 1:q){
-             prob_atbi_in_year = prob_atbi_in_year + ((1-ltbiNoVax)^(t-1))*ltbiNoVax*((1-atbiNoVax)^(q-t))*atbiNoVax;
-          }
-          survival=survival+prob_atbi_in_year;
-        }
-        target += R[n]*log(1-survival);
-      }
-    }
-  }
-}
-
-"
-
-pomp::bake("results/noVaxATBI.RDS",{
-  stan(model_code=stan_code,
-              model_name="noVaxATBI",
-              data=data,
-              iter=10000, chains=4, init=0, seed=4)
-}) -> fit
-summary(fit)$summary
 ```
 
