@@ -393,7 +393,7 @@ cases <- cases[,.(R=.N),by=.(timeNoVax,timeWithVax,atbi)]
 controls <- controls[,.(R=.N),by=.(timeNoVax,timeWithVax,atbi)]
 
 stanData <- rbind(controls,cases)
-stanData[timeNoVax==1]
+print(stanData)
 
 #stanData <- cases
 data = list(N=nrow(stanData),
