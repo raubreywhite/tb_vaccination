@@ -7,7 +7,7 @@ output:
 
 PDF Version available [here](http://rwhite.no/tb_vaccination/tb_vaccination.pdf).
 
-## Data creation
+## 0. Data creation
 
 We construct three datasets: `peopleNoVax`, `peopleWithVax`, and `peopleTB`. 
 
@@ -126,7 +126,7 @@ pomp::bake("data/peopleTB.RDS",{
 }) -> peopleTB
 ```
 
-## Detecting LTBI without vaccination
+## 1. Detecting LTBI without vaccination
 
 We will try to model the annual risk of LTBI in the dataset `peopleNoVax`, where LTBI is only measured at the end of the dataset (i.e. after 17 years).
 
@@ -179,7 +179,7 @@ summary(fit)$summary
 plot(fit)
 ```
 
-## Detecting LTBI with vaccination
+## 2. Detecting LTBI with vaccination
 
 We will try to model the annual risk of LTBI in the dataset `peopleWithVax`, where LTBI is only measured at the end of the dataset (i.e. after 17 years), however, the risk of LTBI has changed due to the cessation of vaccination.
 
@@ -238,7 +238,7 @@ plot(fit)
 ```
 
 
-## Detecting straight ATBI without vaccination
+## 3. Detecting straight ATBI without vaccination
 
 We will try to model the annual risk of ATBI in the dataset `peopleTB`, where ATBI is measured at the end of each year. This is an example of survival analysis, as the people who were not infected with ATBI will have a right-censored time at the end of the followup.
 
@@ -266,6 +266,7 @@ for(i in 1:17){
   cases[[i]] <- peopleTB[[i]][atbi==1]
 }
 cases <- rbindlist(cases)
+cases[,timeNoVax:=timeNoVax+1]
 controls <- peopleTB[[17]][ageAtTB==0]
 
 cases <- cases[,.(R=.N),by=.(timeNoVax,timeWithVax,atbi)]
@@ -325,22 +326,62 @@ plot(fit)
 ```
 
 
-## Detecting ATBI following LTBI without vaccination
+## 4. Detecting ATBI following LTBI without vaccination
 
 Using the dataset `peopleNoVax`, we try to estimate the annual risk of LTBI and ATBI, given that we can only observe ATBI in the year that it occurs. This is an extension of the previous models.
 
-In our dataset, for person $i$, the probability that they will get ATBI after $y_i$ years is distributed as a geometric distribution:
+In our dataset, for person $i$, the probability that they will get LTBI after $l_i$ years is distributed as a geometric distribution:
+
+$$f(L_i = l_i | p_L) = (1-p_L)^{(l_i-1)} \times p_L$$
+
+where $l_i=1, \dots, \infty$.
+
+In our dataset, for person $i$, the probability that they will get ATBI $a_i$ years after being infected with LTBI (where the year of LTBI acquirement counts as a year) is distributed as a geometric distribution:
+
+$$f(A_i = a_i | p_A) = (1-p_A)^{(a_i-1)} \times p_A$$
+
+where $a_i=1, \dots, \infty$.
+
+We can put these together, and say that for person $i$, the probability that they will get ATBI after $y_i$ years is equal to $l_i$ + $a_i$ and is distributed as a geometric distribution:
+
+$$f(Y_i = y_i | p_L, p_A) = \Sigma_{t=1}^{y_i} f(L_i = t | p_L) \times f(A_i = y_i - t + 1| p_A)$$
 
 $$f(Y_i = y_i | p_L, p_A) = \Sigma_{t=1}^{y_i} (1-p_L)^{(t-1)} \times p_L \times (1-p_A)^{(y_i-t)} \times p_A$$
 
-Briefly described, we calculate the probability that a person gets LTBI in year $t$ and subsequently ATBI in year $y_i$, then we sum these probabilities for $t=1, \dots, y_i$.
-
 The survival function can thus be defined as:
 
-$$S(y_i | p_L, p_A) = 1 - \Sigma_{t=1}^{y_i} f(t | p_L, p_A) $$
+$$S(y_i | p_L, p_A) = 1 - \Sigma_{t=1}^{y_i} f(Y_i = t | p_L, p_A) $$
+
+We can also see the distribution of Y using simulations:
 
 ```{r}
+pl <- 0.05
+pa <- 0.025
+TS <- ts <- 400
 
+f <- c() # ATBI IN FIRST 10 YRS
+f[1]=0
+for(i in 1:TS){
+  ts <- i
+  t <- 1:(ts)
+  f[i] <- sum(((1-pl)^(t-1))*pl*((1-pa)^(ts-t))*pa)
+}
+
+pd <- data.frame(Y=1:TS,p=f)
+q <- ggplot(pd,aes(x=Y,ymax=p,ymin=0))
+q <- q + geom_ribbon(alpha=0.5,colour="black")
+q
+```
+
+We also note that it sums to 1:
+```{r}
+sum(f)
+```
+
+We can now try to fit this using stan:
+
+```{r}
+#file.remove("results/noVaxATBI.RDS")
 cases <- list()
 for(i in 1:17){
   cases[[i]] <- peopleNoVax[[i]][atbi==1]
@@ -381,25 +422,26 @@ real ps;
     int personTime;
     real prob_atbi_in_year;
     real survival;
+    real p[201];
+
+    for(q in 1:17){
+      prob_atbi_in_year=0;
+      for(t in 1:q){
+        prob_atbi_in_year = prob_atbi_in_year + ((1-ltbiNoVax)^(t-1))*ltbiNoVax*((1-atbiNoVax)^(q-t))*atbiNoVax;
+      }
+      p[q]=prob_atbi_in_year;
+    }
 
     for (n in 1:N){
       personTime = timeNoVax[n];
       replicates = R[n];
 
       if( ATBIstatus[n]==1 ){
-        prob_atbi_in_year = 0;
-        for(t in 1:personTime){
-           prob_atbi_in_year = prob_atbi_in_year + ((1-ltbiNoVax)^(t-1))*ltbiNoVax*((1-atbiNoVax)^(personTime-t))*atbiNoVax;
-        }
-        target += replicates*log(prob_atbi_in_year);
+        target += replicates*log(p[personTime]);
       } else {
         survival=0;
         for(q in 1:personTime){
-          prob_atbi_in_year = 0;
-          for(t in 1:q){
-             prob_atbi_in_year = prob_atbi_in_year + ((1-ltbiNoVax)^(t-1))*ltbiNoVax*((1-atbiNoVax)^(q-t))*atbiNoVax;
-          }
-          survival=survival+prob_atbi_in_year;
+          survival=survival+p[q];
         }
         target += replicates*log(1-survival);
       }
@@ -413,33 +455,10 @@ pomp::bake("results/noVaxATBI.RDS",{
   stan(model_code=stan_code,
               model_name="noVaxATBI",
               data=data,
-              iter=10000, chains=4, init=0, seed=4)
+              iter=2000, chains=4, init=0, seed=4)
 }) -> fit
 summary(fit)$summary
 plot(fit)
 ```
 
-## Fictional stuff -- ignore
-
-```{r}
-
-pl <- 0.05
-pa <- 0.05
-TS <- ts <- 17
-t <- 1:ts
-
-s1 <- (1-pl)^ts # NO LTBI IN FIRST 10 YRS
-s2 <- ((1-pl)^t)*pl*((1-pa)^(ts-t+1)) # LTBI + NO ATBI IN FIRST 10 YRS
-sum(s1)+sum(s2)
-f <- c() # ATBI IN FIRST 10 YRS
-for(i in 1:TS){
-  ts <- i
-  t <- 1:ts
-  f[i] <- sum(((1-pl)^t)*pl*((1-pa)^(ts-t))*pa)
-}
-sum(f)
-sum(s1)+sum(s2)
-sum(f)+sum(s1)+sum(s2)
-
-```
-
+Unfortunately, this does not meet our expected output of `ltbiNoVax=0.05` and `atbiNoVax=0.025`
