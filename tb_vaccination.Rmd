@@ -325,7 +325,7 @@ summary(fit)$summary
 plot(fit)
 ```
 
-## 4. Detecting ATBI following LTBI without vaccination
+## 4. Detecting ATBI following LTBI without vaccination (prespecifying ATBI risk)
 
 Using the dataset `peopleNoVax`, we try to estimate the annual risk of LTBI and ATBI, given that we can only observe ATBI in the year that it occurs. This is an extension of the previous models.
 
@@ -377,7 +377,7 @@ We also note that it sums to 1:
 sum(f)
 ```
 
-We can now try to fit this using stan:
+We can now try to fit this using stan, where we hardcode the ATBI risk at $p_A=0.10$:
 
 ```{r}
 #file.remove("results/noVaxATBI.RDS")
@@ -463,59 +463,9 @@ plot(fit)
 
 This meets our expected output of `ltbiNoVax=0.05`
 
-## 5. Detecting ATBI following LTBI without vaccination
+## 5. Detecting ATBI following LTBI without vaccination (estimating ATBI risk)
 
-Using the dataset `peopleNoVax`, we try to estimate the annual risk of LTBI and ATBI, given that we can only observe ATBI in the year that it occurs. This is an extension of the previous models.
-
-In our dataset, for person $i$, the probability that they will get LTBI after $l_i$ years is distributed as a geometric distribution:
-
-$$f(L_i = l_i | p_L) = (1-p_L)^{(l_i-1)} \times p_L$$
-
-where $l_i=1, \dots, \infty$.
-
-In our dataset, for person $i$, the probability that they will get ATBI $a_i$ years after being infected with LTBI (where the year of LTBI acquirement counts as a year) is distributed as a geometric distribution:
-
-$$f(A_i = a_i | p_A) = (1-p_A)^{(a_i-1)} \times p_A$$
-
-where $a_i=1, \dots, \infty$.
-
-We can put these together, and say that for person $i$, the probability that they will get ATBI after $y_i$ years is equal to $l_i$ + $a_i$ and is distributed as a geometric distribution:
-
-$$f(Y_i = y_i | p_L, p_A) = \Sigma_{t=1}^{y_i} f(L_i = t | p_L) \times f(A_i = y_i - t + 1| p_A)$$
-
-$$f(Y_i = y_i | p_L, p_A) = \Sigma_{t=1}^{y_i} (1-p_L)^{(t-1)} \times p_L \times (1-p_A)^{(y_i-t)} \times p_A$$
-
-The survival function can thus be defined as:
-
-$$S(y_i | p_L, p_A) = 1 - \Sigma_{t=1}^{y_i} f(Y_i = t | p_L, p_A) $$
-
-We can also see the distribution of Y using simulations:
-
-```{r}
-pl <- 0.05
-pa <- 0.025
-TS <- ts <- 400
-
-f <- c() # ATBI IN FIRST 10 YRS
-f[1]=0
-for(i in 1:TS){
-  ts <- i
-  t <- 1:(ts)
-  f[i] <- sum(((1-pl)^(t-1))*pl*((1-pa)^(ts-t))*pa)
-}
-
-pd <- data.frame(Y=1:TS,p=f)
-q <- ggplot(pd,aes(x=Y,ymax=p,ymin=0))
-q <- q + geom_ribbon(alpha=0.5,colour="black")
-q
-```
-
-We also note that it sums to 1:
-```{r}
-sum(f)
-```
-
-We can now try to fit this using stan:
+This is the same as the previous model, however, we attempt to estimate $p_A$.
 
 ```{r}
 #file.remove("results/noVaxATBI.RDS")
@@ -599,3 +549,142 @@ plot(fit)
 ```
 
 Unfortunately, this does not meet our expected output of `ltbiNoVax=0.05` and `atbiNoVax=0.025`
+
+## 6. Detecting ATBI following LTBI with vaccination
+
+Using the dataset `peopleNoVax`, we try to estimate the annual risk of LTBI and ATBI, given that we can only observe ATBI in the year that it occurs. This is an extension of the previous models.
+
+In our dataset, for person $i$, the probability that they will get LTBI after $l_i$ years is distributed as a geometric distribution:
+
+$$f(L_i = l_i | p_L) = (1-p_L)^{(l_i-1)} \times p_L$$
+
+where $l_i=1, \dots, \infty$.
+
+In our dataset, for person $i$, the probability that they will get ATBI $a_i$ years after being infected with LTBI (where the year of LTBI acquirement counts as a year) is distributed as a geometric distribution:
+
+$$f(A_i = a_i | p_A) = (1-p_A)^{(a_i-1)} \times p_A$$
+
+where $a_i=1, \dots, \infty$.
+
+We can put these together, and say that for person $i$, the probability that they will get ATBI after $y_i$ years is equal to $l_i$ + $a_i$ and is distributed as a geometric distribution:
+
+$$f(Y_i = y_i | p_L, p_A) = \Sigma_{t=1}^{y_i} f(L_i = t | p_L) \times f(A_i = y_i - t + 1| p_A)$$
+
+$$f(Y_i = y_i | p_L, p_A) = \Sigma_{t=1}^{y_i} (1-p_L)^{(t-1)} \times p_L \times (1-p_A)^{(y_i-t)} \times p_A$$
+
+The survival function can thus be defined as:
+
+$$S(y_i | p_L, p_A) = 1 - \Sigma_{t=1}^{y_i} f(Y_i = t | p_L, p_A) $$
+
+We can also see the distribution of Y using simulations:
+
+```{r}
+pl <- 0.05
+pa <- 0.10
+TS <- ts <- 200
+
+f <- c() # ATBI IN FIRST 10 YRS
+f[1]=0
+for(i in 1:TS){
+  ts <- i
+  t <- 1:(ts)
+  f[i] <- sum(((1-pl)^(t-1))*pl*((1-pa)^(ts-t))*pa)
+}
+
+pd <- data.frame(Y=1:TS,p=f)
+q <- ggplot(pd,aes(x=Y,ymax=p,ymin=0))
+q <- q + geom_ribbon(alpha=0.5,colour="black")
+q
+```
+
+We also note that it sums to 1:
+```{r}
+sum(f)
+```
+
+We can now try to fit this using stan:
+
+```{r}
+#file.remove("results/noVaxATBI.RDS")
+cases <- list()
+for(i in 1:17){
+  cases[[i]] <- peopleWithVax[[i]][atbi==1]
+}
+cases <- rbindlist(cases)
+controls <- peopleWithVax[[17]][ageAtTB==0]
+
+cases <- cases[,.(R=.N),by=.(timeNoVax,timeWithVax,atbi)]
+controls <- controls[,.(R=.N),by=.(timeNoVax,timeWithVax,atbi)]
+
+stanData <- rbind(controls,cases)
+print(stanData)
+
+#stanData <- cases
+data = list(N=nrow(stanData),
+            R=stanData$R,
+            ATBIstatus=stanData$atbi,
+            timeNoVax=stanData$timeNoVax)
+
+stan_code = "
+data {
+  int<lower=0> N;
+  int timeNoVax[N];
+  int timeWithVax[N];
+  int R[N];
+  int ATBIstatus[N];
+}
+parameters {
+  real<lower=0,upper=0.5> ltbiNoVax;
+}
+model {
+real ps;
+  ltbiNoVax ~ beta(0.05, 1);
+  
+  {
+    real atbiNoVax;
+    int replicates;
+    int personTime;
+    real prob_atbi_in_year;
+    real survival;
+    real p[201];
+
+    atbiNoVax=0.10;
+
+    for(q in 1:17){
+      prob_atbi_in_year=0;
+      for(t in 1:q){
+        prob_atbi_in_year = prob_atbi_in_year + ((1-ltbiNoVax)^(t-1))*ltbiNoVax*((1-atbiNoVax)^(q-t))*atbiNoVax;
+      }
+      p[q]=prob_atbi_in_year;
+    }
+
+    for (n in 1:N){
+      personTime = timeNoVax[n];
+      replicates = R[n];
+
+      if( ATBIstatus[n]==1 ){
+        target += replicates*log(p[personTime]);
+      } else {
+        survival=0;
+        for(q in 1:personTime){
+          survival=survival+p[q];
+        }
+        target += replicates*log(1-survival);
+      }
+    }
+  }
+}
+
+"
+
+pomp::bake("results/noVaxATBI_fixed_ATBI.RDS",{
+  stan(model_code=stan_code,
+              model_name="noVaxATBI_fixed_ATBI",
+              data=data,
+              iter=2000, chains=4, init=0, seed=4)
+}) -> fit
+summary(fit)$summary
+plot(fit)
+```
+
+This meets our expected output of `ltbiNoVax=0.05`
