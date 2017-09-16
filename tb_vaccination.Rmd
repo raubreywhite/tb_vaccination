@@ -550,15 +550,106 @@ plot(fit)
 
 Unfortunately, this does not meet our expected output of `ltbiNoVax=0.05` and `atbiNoVax=0.025`
 
-## 6. Detecting ATBI following LTBI with vaccination
+## 6. Detecting ATBI following LTBI with vaccination (prespecifying ATBI risk)
 
-Using the dataset `peopleNoVax`, we try to estimate the annual risk of LTBI and ATBI, given that we can only observe ATBI in the year that it occurs. This is an extension of the previous models.
+Using the dataset `peopleWithVax`, we try to estimate the annual risk of LTBI and ATBI, given that we can only observe ATBI in the year that it occurs. This is an extension of the previous models.
 
-In our dataset, for person $i$, the probability that they will get LTBI after $l_i$ years is distributed as a geometric distribution:
+In our dataset, for person $i$, whose time at risk began in year $s_i$, with vaccination ceasing in year $v$ (i.e. no vaccination occurring in year $V_i$), the probability that they will get LTBI after $l_i$ years is distributed as a geometric distribution:
 
-$$f(L_i = l_i | p_L) = (1-p_L)^{(l_i-1)} \times p_L$$
+For $v-s_i \le 0 < l_i$:
 
-where $l_i=1, \dots, \infty$.
+$$f(L_i = l_i | p_{LN}, p_{LW}) = (1-p_{LN})^{(l_i-1)} \times p_{LN}$$
+
+For $0 < l_i < v - s_i$
+
+$$f(L_i = l_i | p_{LN}, p_{LW}) = (1-p_{LW})^{(l_i-1)} \times p_{LW}$$
+
+For $0 < v - s_i \le l_i$
+$s_i < v$ and $s_i + l_i \ge v$:
+
+$$f(L_i = l_i | p_{LN}, p_{LW}) = (1-p_{LW})^{(S_i-1)} \times (1-p_{LN})^{(l_i-1)} \times p_{LN}$$
+
+To simplify things, we can define years spent during vaccination as $tw_i = max(min(v - s_i, l_i), 0)$, and years spent without vaccination as $tn_i = \left(l_i - max(v_i - s_i, 0)\right) \times I(v - s_i \le l_i)$.
+
+Scenario 1: $s_i=2001$, $v=2010$, $l_i=1$:
+
+$tw_i = max(min(2010-2001, 1), 0) = max(min(9, 1), 0) = max(1, 0) = 1$
+
+$tn_i = (1 - max(2010 - 2001, 0)) \times I(2010 - 2001 \le 1) = (1 - max(9, 0)) \times I(9 \le 1) = 0$
+
+Scenario 2: $s_i=2001$, $v=2010$, $l_i=9$:
+
+$tw_i = max(min(2010-2001, 9), 0) = max(min(9, 9), 0) = max(9, 0) = 9$
+
+$tn_i = (9 - max(2010 - 2001, 0)) \times I(2010 - 2001 \le 9) = (9 - max(9, 0)) \times I(9 \le 9) = 0$
+
+Scenario 3: $s_i=2001$, $v=2010$, $l_i=10$:
+
+$tw_i = max(min(2010-2001, 10), 0) = max(min(9, 10), 0) = max(9, 0) = 9$
+
+$tn_i = (10 - max(2010 - 2001, 0)) \times I(2010 - 2001 \le 10) = (10 - max(9, 0)) \times I(9 \le 10) = 1$
+
+Scenario 4: $s_i=2011$, $v=2010$, $l_i=10$:
+
+$tw_i = max(min(2010-2011, 10), 0) = max(min(-1, 10), 0) = max(-1, 0) = 0$
+
+$tn_i = (10 - max(2010 - 2011, 0)) \times I(2010 - 2011 \le 10) = (10 - max(-1, 0)) \times I(-1 \le 10) = 10$
+
+Showing that $tw_i$ and $tn_i$ are correctly specified, we can now rewrite $f(L_i = l_i | p_{LN}, p_{LW})$:
+
+$$f(L_i = l_i | p_{LN}, p_{LW}) = (1-p_{LW})^{(TW_i-1) \times I(TW_i>0)} \times (1-p_{LN})^{(TN_i-1) \times I(TN_i>0)} \times q$$
+
+where
+
+$$q = (1-p_{LW})^{I(TW_i > 0\ \&\ TN_i>0)} \times p_{LW}^{I(TW_i > 0\ \&\ TN_i=0)} \times p_{LN}^{I(TN_i>0)}$$
+
+```{r}
+pdfLTBI.int <- function(plw,pln,s,v,l){
+  tw <- max(min(v-s,l),0)
+  tn <- (l-max(v-s,0))*I(v-s<l)
+  q <- 1
+  q <- q * (1-plw)^I(tw>0 & tn>0)
+  q <- q * plw^(tw>0 & tn==0)
+  q <- q * pln^(tn>0)
+  
+  p <- q
+  if(tw>0) p <- p * (1-plw)^(tw-1)
+  if(tn>0) p <- p*(1-pln)^(tn-1)
+  return(p)
+}
+
+pdfLTBI <- Vectorize(pdfLTBI.int)
+```
+
+```{r}
+TS <- 100
+s <- 2001
+v <- 2010
+f <- pdfLTBI(plw=0.025,pln=0.05,s=s,v=v,l=c(1:TS))
+sum(f)
+
+pd <- data.frame(Y=1:TS+s-1,p=f)
+q <- ggplot(pd,aes(x=Y,ymax=p,ymin=0))
+q <- q + geom_ribbon(alpha=0.5,colour="black")
+q <- q + scale_x_continuous("Year",breaks=seq(2000,2200,10))
+q <- q + labs(title=sprintf("PDF of year of LTBI infection for a person born in %s,\nvaccination ceasing in %s",s,v))
+q
+```
+
+```{r}
+TS <- 100
+s <- 2020
+v <- 2010
+f <- pdfLTBI(plw=0.025,pln=0.05,s=s,v=v,l=c(1:TS))
+sum(f)
+
+pd <- data.frame(Y=1:TS+s-1,p=f)
+q <- ggplot(pd,aes(x=Y,ymax=p,ymin=0))
+q <- q + geom_ribbon(alpha=0.5,colour="black")
+q <- q + scale_x_continuous("Year",breaks=seq(2000,2200,10))
+q <- q + labs(title=sprintf("PDF of year of LTBI infection for a person born in %s,\nvaccination ceasing in %s",s,v))
+q
+```
 
 In our dataset, for person $i$, the probability that they will get ATBI $a_i$ years after being infected with LTBI (where the year of LTBI acquirement counts as a year) is distributed as a geometric distribution:
 
@@ -579,33 +670,51 @@ $$S(y_i | p_L, p_A) = 1 - \Sigma_{t=1}^{y_i} f(Y_i = t | p_L, p_A) $$
 We can also see the distribution of Y using simulations:
 
 ```{r}
-pl <- 0.05
-pa <- 0.10
-TS <- ts <- 200
-
-f <- c() # ATBI IN FIRST 10 YRS
-f[1]=0
-for(i in 1:TS){
-  ts <- i
-  t <- 1:(ts)
-  f[i] <- sum(((1-pl)^(t-1))*pl*((1-pa)^(ts-t))*pa)
+pdfATBI.int <- function(pa,plw,pln,s,v,l){
+  p <- 0
+  for(i in 1:l){
+    p <- p + pdfLTBI(plw,pln,s,v,i)*((1-pa)^(l-i))*pa
+  }
+  return(p)
 }
 
-pd <- data.frame(Y=1:TS,p=f)
+pdfATBI <- Vectorize(pdfATBI.int)
+```
+
+```{r}
+TS <- 100
+s <- 2001
+v <- 2010
+f <- pdfATBI(pa=0.10,plw=0.025,pln=0.05,s=s,v=v,l=c(1:TS))
+sum(f)
+
+pd <- data.frame(Y=1:TS+s-1,p=f)
 q <- ggplot(pd,aes(x=Y,ymax=p,ymin=0))
 q <- q + geom_ribbon(alpha=0.5,colour="black")
+q <- q + scale_x_continuous("Year",breaks=seq(2000,2200,10))
+q <- q + labs(title=sprintf("PDF of year of ATBI infection for a person born in %s,\nvaccination ceasing in %s",s,v))
 q
 ```
 
-We also note that it sums to 1:
 ```{r}
+TS <- 100
+s <- 2020
+v <- 2010
+f <- pdfATBI(pa=0.10,plw=0.025,pln=0.05,s=s,v=v,l=c(1:TS))
 sum(f)
+
+pd <- data.frame(Y=1:TS+s-1,p=f)
+q <- ggplot(pd,aes(x=Y,ymax=p,ymin=0))
+q <- q + geom_ribbon(alpha=0.5,colour="black")
+q <- q + scale_x_continuous("Year",breaks=seq(2000,2200,10))
+q <- q + labs(title=sprintf("PDF of year of ATBI infection for a person born in %s,\nvaccination ceasing in %s",s,v))
+q
 ```
 
 We can now try to fit this using stan:
 
 ```{r}
-#file.remove("results/noVaxATBI.RDS")
+#file.remove("results/withVaxATBI.RDS")
 cases <- list()
 for(i in 1:17){
   cases[[i]] <- peopleWithVax[[i]][atbi==1]
@@ -623,7 +732,8 @@ print(stanData)
 data = list(N=nrow(stanData),
             R=stanData$R,
             ATBIstatus=stanData$atbi,
-            timeNoVax=stanData$timeNoVax)
+            timeNoVax=stanData$timeNoVax,
+            timeWithVax=stanData$timeWithVax)
 
 stan_code = "
 data {
@@ -635,27 +745,80 @@ data {
 }
 parameters {
   real<lower=0,upper=0.5> ltbiNoVax;
+  //real<lower=0,upper=0.5> ltbiWithVax;
 }
 model {
-real ps;
   ltbiNoVax ~ beta(0.05, 1);
+  //ltbiWithVax ~ beta(0.05, 1);
   
   {
-    real atbiNoVax;
+    real ltbiWithVax=0.025;
+    real p;
+    real q;
+    real atbi=0.1;
     int replicates;
     int personTime;
     real prob_atbi_in_year;
     real survival;
-    real p[201];
+    real pltbi[11,11];
+    real patbi[11,11];
+    real satbi[11,11];
+    int tw;
+    int tn;
 
-    atbiNoVax=0.10;
+    for(i in 1:10){
+      for(j in 1:10){
+        p = 0;
+        q = 1;
+        tw=i-1;
+        tn=j-1;
+        if(tw>0 && tn==0){
+          q = q * (1-ltbiWithVax);
+        }
+        if(tw>0 && tn==0){
+          q = q * ltbiWithVax;
+        }
+        if(tn>0){
+          q = q * ltbiNoVax;
+        }
 
-    for(q in 1:17){
-      prob_atbi_in_year=0;
-      for(t in 1:q){
-        prob_atbi_in_year = prob_atbi_in_year + ((1-ltbiNoVax)^(t-1))*ltbiNoVax*((1-atbiNoVax)^(q-t))*atbiNoVax;
+        if(tw>0){
+          q = q * (1-ltbiWithVax)^(tw-1);
+        }
+        if(tn>0){
+          q = q * (1-ltbiNoVax)^(tn-1);
+        }
+        pltbi[i,j]=q;
       }
-      p[q]=prob_atbi_in_year;
+    }
+    pltbi[1,1]=0.0;
+
+    for(i in 1:10){
+      for(j in 1:10){
+        tw=i-1;
+        tn=j-1;
+        patbi[i,j]=0;
+        for(l in 1:i){
+          patbi[i,j]=patbi[i,j] + pltbi[l,1]*atbi*(1-atbi)^(i+j-l-1); // adding up time with vaccine
+        }
+        for(l in 1:j){
+          patbi[i,j]=patbi[i,j] + pltbi[i,l]*atbi*(1-atbi)^(i+j-i-l); // adding up time without vaccine
+        }
+      }
+    }
+
+    for(i in 1:10){
+      for(j in 1:10){
+        tw=i-1;
+        tn=j-1;
+        satbi[i,j]=1;
+        for(l in 1:i){
+          satbi[i,j]=satbi[i,j] - patbi[l,1]; // adding up time with vaccine
+        }
+        for(l in 1:j){
+          satbi[i,j]=satbi[i,j] - patbi[i,l]; // adding up time without vaccine
+        }
+      }
     }
 
     for (n in 1:N){
@@ -663,13 +826,9 @@ real ps;
       replicates = R[n];
 
       if( ATBIstatus[n]==1 ){
-        target += replicates*log(p[personTime]);
+        target += replicates*log(patbi[timeWithVax[n]+1,timeNoVax[n]+1]);
       } else {
-        survival=0;
-        for(q in 1:personTime){
-          survival=survival+p[q];
-        }
-        target += replicates*log(1-survival);
+        target += replicates*log(satbi[timeWithVax[n]+1,timeNoVax[n]+1]);
       }
     }
   }
@@ -677,11 +836,204 @@ real ps;
 
 "
 
-pomp::bake("results/noVaxATBI_fixed_ATBI.RDS",{
+pomp::bake("results/withVaxATBI.RDS",{
   stan(model_code=stan_code,
-              model_name="noVaxATBI_fixed_ATBI",
+              model_name="withVaxATBI",
               data=data,
               iter=2000, chains=4, init=0, seed=4)
+}) -> fit
+summary(fit)$summary
+plot(fit)
+```
+
+This meets our expected output of `ltbiNoVax=0.05`
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+#file.remove("results/withVaxATBI.RDS")
+cases <- list()
+for(i in 1:17){
+  cases[[i]] <- peopleWithVax[[i]][atbi==1]
+}
+cases <- rbindlist(cases)
+controls <- peopleWithVax[[17]][ageAtTB==0]
+
+cases <- cases[,.(R=.N),by=.(timeNoVax,timeWithVax,atbi)]
+controls <- controls[,.(R=.N),by=.(timeNoVax,timeWithVax,atbi)]
+
+stanData <- rbind(controls,cases)
+print(stanData)
+
+#stanData <- cases
+data = list(N=nrow(stanData),
+            R=stanData$R,
+            ATBIstatus=stanData$atbi,
+            timeNoVax=stanData$timeNoVax,
+            timeWithVax=stanData$timeWithVax)
+
+stan_code = "
+data {
+  int<lower=0> N;
+  int timeNoVax[N];
+  int timeWithVax[N];
+  int R[N];
+  int ATBIstatus[N];
+}
+parameters {
+  real<lower=0,upper=0.5> ltbiNoVax;
+  //real<lower=0,upper=0.5> ltbiWithVax;
+}
+model {
+  ltbiNoVax ~ beta(0.05, 1);
+  //ltbiWithVax ~ beta(0.05, 1);
+  
+  {
+    real ltbiWithVax=0.025;
+    real p;
+    real q;
+    real atbi=0.1;
+    int replicates;
+    int personTime;
+    real prob_atbi_in_year;
+    real survival;
+    real pltbi[21,21];
+    real patbi[21,21];
+    real satbi[21,21];
+    int tw;
+    int tn;
+
+    for(i in 1:21){
+      for(j in 1:21){
+        p = 0.0;
+        q = 1.0;
+        tw=i-1;
+        tn=j-1;
+        if(tw>0 && tn==0){
+          q = q * (1-ltbiWithVax);
+        }
+        if(tw>0 && tn==0){
+          q = q * ltbiWithVax;
+        }
+        if(tn>0){
+          q = q * ltbiNoVax;
+        }
+
+        if(tw>0){
+          q = q * (1-ltbiWithVax)^(tw-1);
+        }
+        if(tn>0){
+          q = q * (1-ltbiNoVax)^(tn-1);
+        }
+        pltbi[i,j]=q;
+      }
+    }
+    pltbi[1,1]=0.0;
+
+//print(pltbi[1,1])
+//print(pltbi[1,2])
+//print(pltbi[1,3])
+//print(pltbi[1,4])
+
+    for(i in 1:21){
+      for(j in 1:21){
+        tw=i-1;
+        tn=j-1;
+        patbi[i,j]=0;
+        for(l in 1:i){
+          patbi[i,j]=patbi[i,j] + pltbi[l,1]*atbi*(1-atbi)^(i+j-l-1); // adding up time with vaccine
+        }
+        for(l in 1:j){
+          patbi[i,j]=patbi[i,j] + pltbi[i,l]*atbi*(1-atbi)^(i+j-i-l); // adding up time without vaccine
+        }
+      }
+    }
+
+    for(i in 1:21){
+      for(j in 1:21){
+        tw=i-1;
+        tn=j-1;
+        satbi[i,j]=1.0;
+        for(l in 1:i){
+          satbi[i,j]=satbi[i,j] - patbi[l,1]; // adding up time with vaccine
+        }
+        for(l in 1:j){
+          satbi[i,j]=satbi[i,j] - patbi[i,l]; // adding up time without vaccine
+        }
+      }
+    }
+
+    for (n in 1:N){
+      replicates = R[n];
+
+      if( ATBIstatus[n]==1 ){
+        target += replicates*log(patbi[timeWithVax[n]+1,timeNoVax[n]+1]);
+      } else {
+        target += replicates*log(satbi[timeWithVax[n]+1,timeNoVax[n]+1]);
+      }
+    }
+  }
+}
+
+"
+
+pomp::bake("results/withVaxATBI.RDS",{
+  stan(model_code=stan_code,
+              model_name="withVaxATBI",
+              data=data,
+              iter=1000, chains=1, init=0, seed=4)
 }) -> fit
 summary(fit)$summary
 plot(fit)
